@@ -5,6 +5,7 @@
 #define URL_IDENTIFIER @"public.url"
 #define IMAGE_IDENTIFIER @"public.image"
 #define TEXT_IDENTIFIER (NSString *)kUTTypePlainText
+#define DATA_IDENTIFIER (NSString *)kUTTypePropertyList
 
 NSExtensionContext* extensionContext;
 
@@ -12,6 +13,16 @@ NSExtensionContext* extensionContext;
     NSTimer *autoTimer;
     NSString* type;
     NSString* value;
+}
+
+- (BOOL)isContentValid {
+    // Do validation of contentText and/or NSExtensionContext attachments here
+    return YES;
+}
+
++ (BOOL)requiresMainQueueSetup
+{
+    return YES;
 }
 
 - (UIView*) shareView {
@@ -52,7 +63,7 @@ RCT_EXPORT_METHOD(openURL:(NSString *)url) {
 
 
 RCT_REMAP_METHOD(data,
-                 resolver:(RCTPromiseResolveBlock)resolve
+                 resolver:(RCTPromiseResolveBlock)resolve,
                  rejecter:(RCTPromiseRejectBlock)reject)
 {
     [self extractDataFromContext: extensionContext withCallback:^(NSString* val, NSString* contentType, NSException* err) {
@@ -69,40 +80,47 @@ RCT_REMAP_METHOD(data,
 
 - (void)extractDataFromContext:(NSExtensionContext *)context withCallback:(void(^)(NSString *value, NSString* contentType, NSException *exception))callback {
     @try {
-        NSExtensionItem *item = [context.inputItems firstObject];
-        NSArray *attachments = item.attachments;
 
-        __block NSItemProvider *urlProvider = nil;
-        __block NSItemProvider *imageProvider = nil;
-        __block NSItemProvider *textProvider = nil;
+        NSItemProvider *urlProvider = nil;
+        NSItemProvider *imageProvider = nil;
+        NSItemProvider *textProvider = nil;
+        NSItemProvider *dataProvider = nil;
 
-        [attachments enumerateObjectsUsingBlock:^(NSItemProvider *provider, NSUInteger idx, BOOL *stop) {
-            if([provider hasItemConformingToTypeIdentifier:URL_IDENTIFIER]) {
+        for (NSExtensionItem *item in context.inputItems) {
+          for (NSItemProvider *provider in item.attachments) {
+            if ([provider hasItemConformingToTypeIdentifier:DATA_IDENTIFIER]){
+                dataProvider = provider;
+                // break;
+            } else if([provider hasItemConformingToTypeIdentifier:URL_IDENTIFIER]) {
                 urlProvider = provider;
-                *stop = YES;
+                // break;
             } else if ([provider hasItemConformingToTypeIdentifier:TEXT_IDENTIFIER]){
                 textProvider = provider;
-                *stop = YES;
+                // break;
             } else if ([provider hasItemConformingToTypeIdentifier:IMAGE_IDENTIFIER]){
                 imageProvider = provider;
-                *stop = YES;
+                // break;
             }
-        }];
+          }
+        }
 
-        if(urlProvider) {
+        if(dataProvider) {
+            [dataProvider loadItemForTypeIdentifier:DATA_IDENTIFIER options:nil completionHandler:^(NSDictionary *item, NSError *error) {
+                NSDictionary *results = (NSDictionary *)item;
+                NSDictionary *jsPreprocessingResults = results[NSExtensionJavaScriptPreprocessingResultsKey];
+                NSString *documentData = [[results objectForKey:NSExtensionJavaScriptPreprocessingResultsKey] objectForKey:@"documentData"];
+                // See /ios/PlaypostShareExtension/GetDocumentData.js for which data we get
+
+                if(callback) {
+                    callback(documentData, @"text/json", nil);
+                }
+            }];
+        } else if(urlProvider) {
             [urlProvider loadItemForTypeIdentifier:URL_IDENTIFIER options:nil completionHandler:^(id<NSSecureCoding> item, NSError *error) {
                 NSURL *url = (NSURL *)item;
 
                 if(callback) {
                     callback([url absoluteString], @"text/plain", nil);
-                }
-            }];
-        } else if (imageProvider) {
-            [imageProvider loadItemForTypeIdentifier:IMAGE_IDENTIFIER options:nil completionHandler:^(id<NSSecureCoding> item, NSError *error) {
-                NSURL *url = (NSURL *)item;
-
-                if(callback) {
-                    callback([url absoluteString], [[[url absoluteString] pathExtension] lowercaseString], nil);
                 }
             }];
         } else if (textProvider) {
@@ -111,6 +129,14 @@ RCT_REMAP_METHOD(data,
 
                 if(callback) {
                     callback(text, @"text/plain", nil);
+                }
+            }];
+        } else if (imageProvider) {
+            [imageProvider loadItemForTypeIdentifier:IMAGE_IDENTIFIER options:nil completionHandler:^(id<NSSecureCoding> item, NSError *error) {
+                NSURL *url = (NSURL *)item;
+
+                if(callback) {
+                    callback([url absoluteString], [[[url absoluteString] pathExtension] lowercaseString], nil);
                 }
             }];
         } else {
